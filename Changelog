@@ -1,3 +1,23 @@
+Version 3.2.5
+ * Remove use of START in match engine breaking neo4j 3.2
+
+Version 3.2.4 2017-06-17
+ * Upgrade neo4j-driver to 1.2.1 #251
+
+Version 3.2.3 2017-04-17
+ * Return StructuredRel instance as opposed to None when no model supplied #248
+ * Fix get_or_create docs and incorrect call to rel_helper #249
+
+Version 3.2.2 2017-03-17
+ * Add get_or_none to RelationshipManager #246
+ * Make sure relationship types are escaped in queries #188
+ * Fix bug causing unsaved node not to appear in deflate error msg
+ * Allow typed arrays in ArrayProperty #237
+ * Add save hooks to StructuredRel #242
+ * Add tests for UniqueIdProperty when used in batch or merge.
+ * Update documentation for batch operations
+ * Add all_relationships() method to RelationshipManager #239
+
 Version 3.2.1 2017-02-19
  * Dont install test directory #238
 

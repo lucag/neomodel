@@ -4,6 +4,7 @@ from importlib import import_module
 from .exception import NotConnected
 from .util import deprecated
 from .match import OUTGOING, INCOMING, EITHER, _rel_helper, Traversal, NodeSet
+from .relationship import StructuredRel
 
 
 # basestring python 3.x fallback
@@ -83,6 +84,9 @@ class RelationshipManager(object):
                 rp[p] = '{' + p + '}'
                 params[p] = v
 
+            if hasattr(tmp, 'pre_save'):
+                tmp.pre_save()
+
         new_rel = _rel_helper(lhs='us', rhs='them', ident='r', relation_properties=rp, **self.definition)
         q = "MATCH (them), (us) WHERE id(them)={them} and id(us)={self} " \
             "CREATE UNIQUE" + new_rel
@@ -95,30 +99,49 @@ class RelationshipManager(object):
 
         rel_ = self.source.cypher(q + " RETURN r", params)[0][0][0]
         rel_instance = self._set_start_end_cls(rel_model.inflate(rel_), node)
+
+        if hasattr(rel_instance, 'post_save'):
+            rel_instance.post_save()
+
         return rel_instance
 
     @check_source
     def relationship(self, node):
         """
-        Retrieve the StructuredRel object for the relationship between the two nodes.
+        Retrieve the relationship object for this first relationship between self and node.
 
         :param node:
         :return: StructuredRel
         """
         self._check_node(node)
-        if 'model' not in self.definition:
-            raise NotImplemented("'relationship' method only available on relationships"
-                    + " that have a model defined")
+        my_rel = _rel_helper(lhs='us', rhs='them', ident='r', **self.definition)
+        q = "MATCH " + my_rel + " WHERE id(them)={them} and id(us)={self} RETURN r LIMIT 1"
+        rels = self.source.cypher(q, {'them': node.id})[0]
+        if not rels:
+            return
 
-        rel_model = self.definition['model']
+        rel_model = self.definition.get('model') or StructuredRel
+
+        return self._set_start_end_cls(rel_model.inflate(rels[0][0]), node)
+
+    @check_source
+    def all_relationships(self, node):
+        """
+        Retrieve all relationship objects between self and node.
+
+        :param node:
+        :return: [StructuredRel]
+        """
+        self._check_node(node)
 
         my_rel = _rel_helper(lhs='us', rhs='them', ident='r', **self.definition)
-        q = "MATCH (them), (us) WHERE id(them)={them} and id(us)={self} MATCH " \
-            "" + my_rel + " RETURN r"
-        rel = self.source.cypher(q, {'them': node.id})[0][0][0]
-        if not rel:
-            return
-        return self._set_start_end_cls(rel_model.inflate(rel), node)
+        q = "MATCH " + my_rel + " WHERE id(them)={them} and id(us)={self} RETURN r "
+        rels = self.source.cypher(q, {'them': node.id})[0]
+        if not rels:
+            return []
+
+        rel_model = self.definition.get('model') or StructuredRel
+        return [self._set_start_end_cls(rel_model.inflate(rel[0]), node) for rel in rels]
 
     def _set_start_end_cls(self, rel_instance, obj):
         if self.definition['direction'] == INCOMING:
@@ -183,11 +206,11 @@ class RelationshipManager(object):
             "MATCH " + rel + " DELETE r"
         self.source.cypher(q, {'them': node.id})
 
+    @check_source
     def _new_traversal(self):
         return Traversal(self.source, self.name, self.definition)
 
     # The methods below simply proxy the match engine.
-    @check_source
     def get(self, **kwargs):
         """
         Retrieve a related node with the matching node properties.
@@ -196,6 +219,15 @@ class RelationshipManager(object):
         :return: node
         """
         return NodeSet(self._new_traversal()).get(**kwargs)
+
+    def get_or_none(self, **kwargs):
+        """
+        Retrieve a related node with the matching node properties or return None.
+
+        :param kwargs: same syntax as `NodeSet.filter()`
+        :return: node
+        """
+        return NodeSet(self._new_traversal()).get_or_none(**kwargs)
 
     @deprecated("search() is now deprecated please use filter() and exclude()")
     def search(self, **kwargs):
@@ -234,7 +266,6 @@ class RelationshipManager(object):
         """
         return NodeSet(self._new_traversal()).exclude(**kwargs)
 
-    @check_source
     def is_connected(self, node):
         """
         Check if a node is connected with this relationship type

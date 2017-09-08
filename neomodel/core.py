@@ -5,7 +5,7 @@ import sys
 from .exception import DoesNotExist
 from .properties import Property, PropertyManager
 from .hooks import hooks
-from .util import Database, classproperty
+from .util import Database, classproperty, _UnsavedNode
 from . import config
 
 db = Database()
@@ -295,11 +295,11 @@ class StructuredNode(NodeBase):
         :rtype: tuple
         """
         query_params = dict(merge_params=merge_params)
-        n_merge = "(n:{} {{{}}})".format(':'.join(cls.inherited_labels()),
+        n_merge = "n:{} {{{}}}".format(':'.join(cls.inherited_labels()),
                                          ", ".join("{0}: params.create.{0}".format(p) for p in cls.__required_properties__))
         if relationship is None:
             # create "simple" unwind query
-            query = "UNWIND {{merge_params}} as params\n MERGE {}\n ".format(n_merge)
+            query = "UNWIND {{merge_params}} as params\n MERGE ({})\n ".format(n_merge)
         else:
             # validate relationship
             if not isinstance(relationship.source, StructuredNode):
@@ -308,10 +308,14 @@ class StructuredNode(NodeBase):
             if not relation_type:
                 raise ValueError('No relation_type is specified on provided relationship')
 
+            from .match import OUTGOING, _rel_helper
+
             query_params["source_id"] = relationship.source.id
             query = "MATCH (source:{}) WHERE ID(source) = {{source_id}}\n ".format(relationship.source.__label__)
             query += "WITH source\n UNWIND {merge_params} as params \n "
-            query += "MERGE (source)-[:{}]->{} \n ".format(relation_type, n_merge)
+            query += "MERGE "
+            query += _rel_helper(rhs='source', lhs=n_merge, ident=None,
+                                 relation_type=relation_type, direction=OUTGOING)
 
         query += "ON CREATE SET n = params.create\n "
         # if update_existing, write properties on match as well
@@ -331,7 +335,7 @@ class StructuredNode(NodeBase):
         """
         Call to CREATE with parameters map. A new instance will be created and saved.
 
-        :param props: List of dict arguments to get or create the nodes.
+        :param props: dict of properties to create the nodes.
         :type props: tuple
         :param lazy: False by default, specify True to get nodes with id only without the parameters.
         :type: bool
@@ -353,7 +357,7 @@ class StructuredNode(NodeBase):
             query += " RETURN n"
 
         results = []
-        for item in [cls.deflate(p, skip_empty=True) for p in props]:
+        for item in [cls.deflate(p, obj=_UnsavedNode(), skip_empty=True) for p in props]:
             node, _ = db.cypher_query(query, {'create_params': item})
             results.extend(node[0])
 
@@ -370,9 +374,11 @@ class StructuredNode(NodeBase):
         """
         Call to MERGE with parameters map. A new instance will be created and saved if does not already exists,
         this is an atomic operation.
-        Parameters must contain all required properties, any non required properties will be set on created nodes only.
+        Parameters must contain all required properties, any non required properties with defaults will be generated.
 
-        :param props: List of dict arguments to get or create the entities with.
+        Note that the post_create hook isn't called after get_or_create
+
+        :param props: dict of properties to get or create the entities with.
         :type props: tuple
         :param relationship: Optional, relationship to get/create on when new entity is created.
         :param lazy: False by default, specify True to get nodes with id only without the parameters.
@@ -391,7 +397,6 @@ class StructuredNode(NodeBase):
 
         # fetch and build instance for each result
         results = db.cypher_query(query, params)
-        # TODO: check each node if created call post_create()
         return [cls.inflate(r[0]) for r in results[0]]
 
     @classmethod
@@ -399,6 +404,8 @@ class StructuredNode(NodeBase):
         """
         Call to MERGE with parameters map. A new instance will be created and saved if does not already exists,
         this is an atomic operation. If an instance already exists all optional properties specified will be updated.
+
+        Note that the post_create hook isn't called after get_or_create
 
         :param props: List of dict arguments to get or create the entities with.
         :type props: tuple
@@ -423,7 +430,6 @@ class StructuredNode(NodeBase):
 
         # fetch and build instance for each result
         results = db.cypher_query(query, params)
-        # TODO: check each node if created call post_create()
         return [cls.inflate(r[0]) for r in results[0]]
 
     @classmethod
